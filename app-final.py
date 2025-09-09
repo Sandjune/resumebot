@@ -1,6 +1,7 @@
 import os
 import io
 import streamlit as st
+pip install openai==0.28
 
 # ---- Imports for file parsing ----
 from typing import List
