@@ -171,22 +171,89 @@ def retrieve(collection, prompt, k=3):
     return []
 
 
+# === Replace llm_answer_openai with a thin wrapper over _llm_chat ===
 def llm_answer_openai(system_prompt: str, user_prompt: str) -> str:
-    """Call OpenAI Chat Completions with gpt-4o-mini (or your chosen model)."""
-    client = None  # removed; using _llm_chat
-    if client is None:
-        return "Missing OPENAI_API_KEY. Please add it to .streamlit/secrets.toml or your environment."
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        import streamlit as st
-        st.error(f"OpenAI call failed: {e}")
-        return "There was an error calling the LLM. Check your API key, billing, and model name."
+    return _llm_chat(system_prompt, user_prompt)
+
+
+# === Simple UI so the app isn't blank ===
+def main():
+    st.set_page_config(page_title="ResumeBot", page_icon="🧭", layout="centered")
+    st.title("ResumeBot")
+    st.caption("Upload a Job Description and your Resume to tailor an application.")
+
+    with st.sidebar:
+        st.subheader("OpenAI Setup")
+        key_in_secrets = False
+        try:
+            key_in_secrets = bool(st.secrets.get("OPENAI_API_KEY", ""))
+        except Exception:
+            key_in_secrets = False
+        if key_in_secrets:
+            st.success("OPENAI_API_KEY found in secrets.", icon="✅")
+        else:
+            if os.getenv("OPENAI_API_KEY"):
+                st.success("OPENAI_API_KEY found in env.", icon="✅")
+            else:
+                st.warning("Add OPENAI_API_KEY to `.streamlit/secrets.toml` or env.", icon="⚠️")
+
+    st.header("1) Job Description")
+    jd_file = st.file_uploader("Upload JD (.pdf, .docx, .txt)", type=["pdf", "docx", "txt"], key="jd_upl")
+    jd_text_area = st.text_area("...or paste JD text", value=st.session_state.get("jd_text", ""), height=180)
+
+    st.header("2) Your Resume / Profile")
+    cv_file = st.file_uploader("Upload Resume (.pdf, .docx, .txt)", type=["pdf", "docx", "txt"], key="cv_upl")
+    profile_extra = st.text_area("Optional: add notes/links/extra profile info", height=120)
+
+    # Parse uploads
+    if jd_file:
+        st.session_state.jd_text = read_any(jd_file, jd_file.name)
+    else:
+        st.session_state.jd_text = jd_text_area
+
+    parsed_cv = ""
+    if cv_file:
+        parsed_cv = read_any(cv_file, cv_file.name)
+
+    # Compose prompts
+    system_prompt = (
+        "You are a helpful assistant that writes tailored cover letters and bullet points that map a resume "
+        "to a given job description. Be concise and specific."
+    )
+
+    st.header("3) Generate")
+    col1, col2 = st.columns(2)
+    with col1:
+        gen_cover = st.button("Generate Cover Letter")
+    with col2:
+        gen_bullets = st.button("Generate Resume Bullets")
+
+    output = ""
+    if gen_cover or gen_bullets:
+        if not st.session_state.jd_text.strip():
+            st.error("Please provide a Job Description (upload or paste).")
+        elif not (parsed_cv.strip() or profile_extra.strip()):
+            st.error("Please provide your Resume (upload) or profile text.")
+        else:
+            user_prompt = f"""JOB DESCRIPTION:
+{st.session_state.jd_text}
+
+RESUME / PROFILE:
+{parsed_cv}
+
+EXTRA NOTES:
+{profile_extra}
+
+TASK: {"Write a tailored cover letter (<= 300 words)." if gen_cover else "Write 6–8 quantified resume bullet points mapped to the JD, grouped by theme."}
+"""
+            with st.spinner("Thinking..."):
+                output = llm_answer_openai(system_prompt, user_prompt)
+
+    if output:
+        st.divider()
+        st.subheader("Result")
+        st.write(output)
+
+
+if __name__ == "__main__":
+    main()
