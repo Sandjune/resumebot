@@ -1,76 +1,8 @@
 import os
-import io
 import streamlit as st
 
 # ---- Imports for file parsing ----
 from typing import List
-
-# --- OpenAI SDK compatibility (v1.x and legacy 0.x) ---
-# Tries modern client first; falls back to legacy "openai" import if needed.
-def _load_openai_client_and_call():
-    import os, streamlit as st
-    api_key = None
-    try:
-        api_key = st.secrets.get("OPENAI_API_KEY", None)
-    except Exception:
-        api_key = None
-    if not api_key:
-        api_key = os.getenv("OPENAI_API_KEY")
-
-    # Try modern SDK first
-    try:
-        from openai import OpenAI  # v1+
-        if not api_key:
-            st.warning("OpenAI API key not found. Add OPENAI_API_KEY to .streamlit/secrets.toml or environment variables.")
-            return None, "modern"
-        client = OpenAI(api_key=api_key)
-        return client, "modern"
-    except Exception:
-        # Fallback: legacy SDK
-        try:
-            import openai as openai_legacy  # 0.x
-            if not api_key:
-                st.warning("OpenAI API key not found. Add OPENAI_API_KEY to .streamlit/secrets.toml or environment variables.")
-                return None, "legacy"
-            openai_legacy.api_key = api_key
-            return openai_legacy, "legacy"
-        except Exception:
-            st.error("OpenAI SDK not installed. Run: pip install --upgrade openai")
-            return None, "none"
-
-
-def _llm_chat(system_prompt: str, user_prompt: str) -> str:
-    client, mode = _load_openai_client_and_call()
-    if client is None:
-        return "Missing or invalid OpenAI setup. Please configure OPENAI_API_KEY and install the 'openai' package."
-
-    try:
-        if mode == "modern":
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.2,
-            )
-            return resp.choices[0].message.content
-        else:
-            # Legacy API shape
-            resp = client.ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.2,
-            )
-            return resp["choices"][0]["message"]["content"]
-    except Exception as e:
-        import streamlit as st
-        st.error(f"OpenAI call failed: {e}")
-        return "There was an error calling the LLM. Check your API key, billing, SDK version, and model name."
-
 
 try:
     from pypdf import PdfReader
@@ -82,6 +14,40 @@ try:
 except Exception:
     docx = None
 
+# --- OpenAI client (v1.x only) ---
+from openai import OpenAI
+
+def _get_openai_client():
+    # Prefer Streamlit secrets, then env
+    api_key = ""
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", "")
+    except Exception:
+        api_key = ""
+    api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        st.error("Missing OPENAI_API_KEY. Add it to .streamlit/secrets.toml or your environment.")
+        return None
+    return OpenAI(api_key=api_key)
+
+def _llm_chat(system_prompt: str, user_prompt: str) -> str:
+    client = _get_openai_client()
+    if client is None:
+        return "Missing or invalid OpenAI setup. Configure OPENAI_API_KEY."
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        st.error(f"OpenAI call failed: {e}")
+        return "There was an error calling the LLM. Check your API key, billing, SDK version, and model name."
 
 # ===============================
 # Session State Initialization
@@ -89,10 +55,10 @@ except Exception:
 def init_state():
     defaults = {
         "jd_text": "",
-        "cv_text": "",                 # (optional) if you want a single-CV text
-        "profile_corpus": "",          # concatenated text from profile uploads + freeform
-        "collection": None,            # placeholder for your vector DB collection
-        "chat": [],                    # chat history
+        "cv_text": "",
+        "profile_corpus": "",
+        "collection": None,
+        "chat": [],
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -100,34 +66,37 @@ def init_state():
 
 init_state()
 
-
 # ===============================
 # File Parsing Helpers
 # ===============================
 def read_txt(file) -> str:
     try:
-        # file may be BytesIO; decode as utf-8, fallback latin-1
         content = file.read()
         try:
             return content.decode("utf-8")
         except UnicodeDecodeError:
             return content.decode("latin-1", errors="ignore")
     finally:
-        file.seek(0)
+        try:
+            file.seek(0)
+        except Exception:
+            pass
 
 def read_docx(file) -> str:
     if docx is None:
         st.warning("python-docx not installed; cannot read DOCX.")
         return ""
     try:
-        # python-docx can read file-like objects directly
         d = docx.Document(file)
         return "\n".join(p.text for p in d.paragraphs if p.text.strip())
     except Exception as e:
         st.error(f"Failed to read DOCX: {e}")
         return ""
     finally:
-        file.seek(0)
+        try:
+            file.seek(0)
+        except Exception:
+            pass
 
 def read_pdf(file) -> str:
     if PdfReader is None:
@@ -146,7 +115,10 @@ def read_pdf(file) -> str:
         st.error(f"Failed to read PDF: {e}")
         return ""
     finally:
-        file.seek(0)
+        try:
+            file.seek(0)
+        except Exception:
+            pass
 
 def read_any(file, name: str) -> str:
     name_lower = (name or "").lower()
@@ -156,25 +128,20 @@ def read_any(file, name: str) -> str:
         return read_docx(file)
     elif name_lower.endswith(".txt"):
         return read_txt(file)
-    # fallback: try text
+    # fallback
     return read_txt(file)
 
-
 # ===============================
-# Placeholder Retrieval & LLM
-# (replace with your actual logic)
+# Retrieval stub (optional)
 # ===============================
 def retrieve(collection, prompt, k=3):
-    # TODO: replace with your retrieval logic
     return []
 
-
-# === Replace llm_answer_openai with a thin wrapper over _llm_chat ===
+# Single, canonical entry point for the UI to call
 def llm_answer_openai(system_prompt: str, user_prompt: str) -> str:
     return _llm_chat(system_prompt, user_prompt)
 
-
-# === Simple UI so the app isn't blank ===
+# === Streamlit UI ===
 def main():
     st.set_page_config(page_title="ResumeBot", page_icon="🧭", layout="centered")
     st.title("ResumeBot")
@@ -207,51 +174,4 @@ def main():
     if jd_file:
         st.session_state.jd_text = read_any(jd_file, jd_file.name)
     else:
-        st.session_state.jd_text = jd_text_area
-
-    parsed_cv = ""
-    if cv_file:
-        parsed_cv = read_any(cv_file, cv_file.name)
-
-    # Compose prompts
-    system_prompt = (
-        "You are a helpful assistant that writes tailored cover letters and bullet points that map a resume "
-        "to a given job description. Be concise and specific."
-    )
-
-    st.header("3) Generate")
-    col1, col2 = st.columns(2)
-    with col1:
-        gen_cover = st.button("Generate Cover Letter")
-    with col2:
-        gen_bullets = st.button("Generate Resume Bullets")
-
-    output = ""
-    if gen_cover or gen_bullets:
-        if not st.session_state.jd_text.strip():
-            st.error("Please provide a Job Description (upload or paste).")
-        elif not (parsed_cv.strip() or profile_extra.strip()):
-            st.error("Please provide your Resume (upload) or profile text.")
-        else:
-            user_prompt = f"""JOB DESCRIPTION:
-{st.session_state.jd_text}
-
-RESUME / PROFILE:
-{parsed_cv}
-
-EXTRA NOTES:
-{profile_extra}
-
-TASK: {"Write a tailored cover letter (<= 300 words)." if gen_cover else "Write 6–8 quantified resume bullet points mapped to the JD, grouped by theme."}
-"""
-            with st.spinner("Thinking..."):
-                output = llm_answer_openai(system_prompt, user_prompt)
-
-    if output:
-        st.divider()
-        st.subheader("Result")
-        st.write(output)
-
-
-if __name__ == "__main__":
-    main()
+        st.session_state.jd_t
