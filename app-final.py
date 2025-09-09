@@ -5,8 +5,6 @@ import streamlit as st
 # ---- Imports for file parsing ----
 from typing import List
 
-
-
 # --- OpenAI SDK compatibility (v1.x and legacy 0.x) ---
 # Tries modern client first; falls back to legacy "openai" import if needed.
 def _load_openai_client_and_call():
