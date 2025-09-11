@@ -48,7 +48,7 @@ def get_openai_client():
     return OpenAI(api_key=api_key)
 
 
-def call_llm_chat(system_prompt: str, user_prompt: str, model: str = "gpt-4o-mini", temperature: float = 0.2) -> str:
+def call_llm_chat(system_prompt: str, user_prompt: str, model: str = "gpt-3.5-turbo", temperature: float = 0.2) -> str:
     """
     Calls the Chat Completions API using openai>=1.0 interface.
     """
